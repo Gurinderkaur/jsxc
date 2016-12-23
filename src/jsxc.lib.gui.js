@@ -101,6 +101,8 @@ jsxc.gui = {
          return;
       }
 
+      jsxc.changeUIState(jsxc.CONST.UISTATE.INITIATING);
+
       jsxc.gui.regShortNames = new RegExp(emojione.regShortNames.source + '|(' + Object.keys(jsxc.gui.emoticonList.core).join('|') + ')', 'gi');
 
       $('body').append($(jsxc.gui.template.get('windowList')));
@@ -426,9 +428,15 @@ jsxc.gui = {
     * Creates and show loginbox
     */
    showLoginBox: function() {
-      // Set focus to password field
-      $(document).on("complete.dialog.jsxc", function() {
-         $('#jsxc_password').focus();
+      // Set focus to username or password field
+      $(document).one("complete.dialog.jsxc", function() {
+         setTimeout(function() {
+            if ($("#jsxc_username").val().length === 0) {
+               $("#jsxc_username").focus();
+            } else {
+               $('#jsxc_password').focus();
+            }
+         }, 50);
       });
 
       jsxc.gui.dialog.open(jsxc.gui.template.get('loginBox'));
@@ -1459,7 +1467,22 @@ jsxc.gui = {
          return div.prop('outerHTML');
       });
 
+      var obj = $('<div>' + str + '</div>');
+      if (obj.find('.jsxc_emoticon').length === 1 && obj.text().replace(/ /, '').length === 0 && obj.find('*').length === 1) {
+         obj.find('.jsxc_emoticon').addClass('jsxc_large');
+         str = obj.prop('outerHTML');
+      }
+
       return str;
+   },
+
+   restore: function() {
+      jsxc.restoreRoster();
+      jsxc.restoreWindows();
+      jsxc.restoreCompleted = true;
+
+      $(document).trigger('restoreCompleted.jsxc');
+      jsxc.changeUIState(jsxc.CONST.UISTATE.READY);
    }
 };
 
@@ -2071,10 +2094,11 @@ jsxc.gui.window = {
          return false;
       });
 
+      var textinputBlurTimeout;
       win.find('.jsxc_textinput').keyup(function(ev) {
          var body = $(this).val();
 
-         if (ev.which === 13) {
+         if (ev.which === 13 && !ev.shiftKey) {
             body = '';
          }
 
@@ -2084,7 +2108,8 @@ jsxc.gui.window = {
             jsxc.gui.window.close(bid);
          }
       }).keypress(function(ev) {
-         if (ev.which !== 13 || !$(this).val()) {
+         if (ev.which !== 13 || ev.shiftKey || !$(this).val()) {
+            resizeTextarea.call(this);
             return;
          }
 
@@ -2094,15 +2119,38 @@ jsxc.gui.window = {
             msg: $(this).val()
          });
 
-         $(this).val('');
+         $(this).css('height', '').val('');
+
+         ev.preventDefault();
       }).focus(function() {
+         if (textinputBlurTimeout) {
+            clearTimeout(textinputBlurTimeout);
+         }
+
          // remove unread flag
          jsxc.gui.readMsg(bid);
+
+         resizeTextarea.call(this);
+      }).blur(function() {
+         var self = $(this);
+
+         textinputBlurTimeout = setTimeout(function() {
+            self.css('height', '');
+         }, 1200);
       }).mouseenter(function() {
          $('#jsxc_windowList').data('isOver', true);
       }).mouseleave(function() {
          $('#jsxc_windowList').data('isOver', false);
       });
+
+      function resizeTextarea() {
+         if (!$(this).data('originalHeight')) {
+            $(this).data('originalHeight', $(this).outerHeight());
+         }
+         if ($(this).outerHeight() < this.scrollHeight && $(this).val()) {
+            $(this).height($(this).data('originalHeight') * 1.5);
+         }
+      }
 
       win.find('.jsxc_textarea').click(function() {
          // check if user clicks element or selects text
@@ -2163,8 +2211,8 @@ jsxc.gui.window = {
          li.append(jsxc.gui.shortnameToImage(':' + val[1] + ':'));
          li.find('div').attr('title', ins);
          li.click(function() {
-            win.find('input').val(win.find('input').val() + ins);
-            win.find('input').focus();
+            win.find('.jsxc_textinput').val(win.find('.jsxc_textinput').val() + ins);
+            win.find('.jsxc_textinput').focus();
          });
          win.find('.jsxc_emoticons ul').prepend(li);
       });
@@ -2625,6 +2673,12 @@ jsxc.gui.window = {
 
       // replace line breaks
       msg = msg.replace(/(\r\n|\r|\n)/g, '<br />');
+
+      // replace /me command (XEP-0245)
+      var bidData = jsxc.storage.getUserItem('buddy', bid) || {};
+      if (direction === 'in') {
+         msg = msg.replace(/^\/me /, '<i title="/me">' + jsxc.removeHTML(bidData.name || bid) + '</i> ');
+      }
 
       var msgDiv = $("<div>"),
          msgTsDiv = $("<div>");
